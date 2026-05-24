@@ -1,35 +1,40 @@
 <h2 style="text-align:center;">🌦️ Zambretti Enhanced</h2>
-
 {% set f = states('sensor.zambretti_forecast_enh') %}
 {% set d = states('sensor.wx3_pressure_stats') | float(0) %}
-{% set ti = states('sensor.barometer_trend_indication_enh') %}
 {% set p = states('sensor.wx3_weather_station_2ad0b0_wx_pressure') | float %}
-
+{% if d > 2.0 %}
+  {% set ti = 'Rising Rapidly' %}
+{% elif d >= 0.5 %}
+  {% set ti = 'Rising Slowly' %}
+{% elif d > -0.5 %}
+  {% set ti = 'Steady' %}
+{% elif d >= -2.0 %}
+  {% set ti = 'Falling Slowly' %}
+{% else %}
+  {% set ti = 'Falling Rapidly' %}
+{% endif %}
 {# --- Color selection based on forecast text --- #}
 {% if 'Fine' in f or 'Settled' in f %}
   {% set color = '#0078D7' %}
 {% elif 'Improving' in f or 'Bright' in f %}
   {% set color = '#00A300' %}
-{% elif 'Showery' in f or 'Changeable' in f or 'Unsettled' in f %}
+{% elif 'Showers' in f or 'Changeable' in f or 'Unsettled' in f %}
   {% set color = '#FFA500' %}
-{% elif 'Rain' in f or 'Stormy' in f %}
+{% elif 'Rain' in f or 'Snow' in f or 'Stormy' in f %}
   {% set color = '#D83B01' %}
 {% else %}
   {% set color = '#0078D7' %}
 {% endif %}
-
 {% if f == 'unknown' %}
   <p style="text-align:center;color:gray;">⏳ Waiting for 3‑hour history…</p>
 {% else %}
   <p style="text-align:center;font-size:1.6em;color:{{ color }};">
     {{ f }}
   </p>
-
   <hr>
-
   <p style="font-size:1.1em;">
-    <b>Pressure:</b> {{ p | round(1)}} mbar<br>
-    <b>3‑hour Delta:</b> {{ d | round(2)}} mbar<br>
+    <b>Pressure:</b> {{ p | round(1) }} mbar<br>
+    <b>3‑hour Delta:</b> {{ d | round(2) }} mbar<br>
     <b>Trend:</b> {{ ti }}
   </p>
 {% endif %}
