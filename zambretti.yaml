@@ -1,0 +1,158 @@
+###############################################################################
+# zambretti.yaml
+#
+# Original Zambretti Weather Forecast — 3-level trend (rising/steady/falling)
+# Based on the original 26-code Zambretti (1920) framework — public domain.
+#
+# Copyright (c) 2026 Karl W. Berger. All rights reserved.
+#
+# Original contributions by Karl W. Berger:
+#   - Home Assistant Jinja2 implementation
+#   - Code A restored to "Settled Fine" — captures both stable and fair meanings
+#   - "Showery" modernized to "Showers" per 1920s British meteorological
+#     transliteration (describes shower frequency, not precipitation type)
+#
+# Developed with AI assistance from Claude (Anthropic).
+#
+# License: MIT License
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software to use, copy, modify, merge, publish, distribute,
+# and/or sublicense it, subject to the following conditions:
+# The above copyright notice and this permission notice shall be included
+# in all copies or substantial portions of the software.
+#
+# Date: 2026-05-24
+#
+# Dependencies:
+#   sensor.wx3_pressure_stats                        — statistics sensor,
+#                                                      characteristic: change,
+#                                                      max_age: 3h
+#   sensor.wx3_weather_station_2ad0b0_wx_pressure    — current SLP in mbar
+#
+# Architecture note: sensors #2, #3, and #4 all read sensor.wx3_pressure_stats
+# directly rather than chaining through sensor #1 (SLP 3h Delta). This
+# eliminates inter-block timing errors where a downstream sensor could read
+# a stale value from the previous trigger cycle. Sensor #1 exists solely
+# as a display/logging convenience for dashboards.
+###############################################################################
+
+template:
+  # Triggered template: all four sensors evaluate simultaneously every 5 minutes
+  # on the clock tick, ensuring a consistent state snapshot without unnecessary
+  # updates — appropriate for a 12-hour forecast driven by a 3-hour pressure window.
+  - trigger:
+      - platform: time_pattern
+        minutes: "/5"
+
+    sensor:
+
+###############################################################################
+# 1. 3-hour pressure delta — display/logging only
+#    NOT used as input by sensors #2, #3, or #4.
+###############################################################################
+      - name: "SLP 3h Delta"
+        unique_id: slp_3h_delta
+        unit_of_measurement: "mbar"
+        device_class: atmospheric_pressure
+        state_class: measurement
+        state: >
+          {{ states('sensor.wx3_pressure_stats') | float(0) | round(2) }}
+
+###############################################################################
+# 2. Barometer Trend Index (−2…+2)
+#    Reads sensor.wx3_pressure_stats directly — no chaining through sensor #1.
+###############################################################################
+      - name: "Barometer Trend Index"
+        unique_id: barometer_trend_index
+        state_class: measurement
+        state: >
+          {% set d = states('sensor.wx3_pressure_stats') | float(0) %}
+          {% if d > 2.0 %}      2
+          {% elif d >= 0.5 %}   1
+          {% elif d > -0.5 %}   0
+          {% elif d >= -2.0 %} -1
+          {% else %}            -2
+          {% endif %}
+
+###############################################################################
+# 3. Barometer Trend Indication (text)
+#    Reads sensor.wx3_pressure_stats directly — no chaining through sensor #1.
+###############################################################################
+      - name: "Barometer Trend Indication"
+        unique_id: barometer_trend_indication
+        state: >
+          {% set d = states('sensor.wx3_pressure_stats') | float(0) %}
+          {% if d > 2.0 %}
+            Rising Rapidly
+          {% elif d >= 0.5 %}
+            Rising Slowly
+          {% elif d > -0.5 %}
+            Steady
+          {% elif d >= -2.0 %}
+            Falling Slowly
+          {% else %}
+            Falling Rapidly
+          {% endif %}
+
+###############################################################################
+# 4. Zambretti Forecast
+#
+# Three trend levels: rising (t >= 1), steady (t == 0), falling (t <= -1).
+# Rapid and slow trends are treated identically — see zambretti_enhanced.yaml
+# for the full 5-level treatment.
+#
+# All 26 Zambretti codes used verbatim. No snow substitution in this file.
+# Reads sensor.wx3_pressure_stats directly — no chaining through sensor #1.
+###############################################################################
+      - name: "Zambretti Forecast"
+        unique_id: zambretti_forecast
+        state: >
+          {% set p = states('sensor.wx3_weather_station_2ad0b0_wx_pressure') | float(0) %}
+          {% set d = states('sensor.wx3_pressure_stats') | float(0) %}
+          {% set t = 2 if d > 2.0 else 1 if d >= 0.5 else 0 if d > -0.5 else -1 if d >= -2.0 else -2 %}
+
+          {% if t <= -1 %}
+            {# FALLING #}
+            {% if p > 1045 %}A: Settled Fine
+            {% elif p > 1032 %}B: Fine Weather
+            {% elif p > 1020 %}D: Fine, Becoming Less Settled
+            {% elif p > 1014 %}H: Fairly Fine, Showers Later
+            {% elif p > 1006 %}O: Showers, Becoming More Unsettled
+            {% elif p > 1000 %}R: Unsettled, Rain Later
+            {% elif p > 993  %}U: Rain At Times, Worse Later
+            {% elif p > 987  %}V: Rain At Times, Becoming Very Unsettled
+            {% else           %}X: Very Unsettled, Rain
+            {% endif %}
+
+          {% elif t >= 1 %}
+            {# RISING #}
+            {% if p > 1025 %}A: Settled Fine
+            {% elif p > 1016 %}B: Fine Weather
+            {% elif p > 1009 %}C: Becoming Fine
+            {% elif p > 1003 %}F: Fairly Fine, Improving
+            {% elif p > 997  %}G: Fairly Fine, Possible Showers Early
+            {% elif p > 992  %}I: Showers Early, Improving
+            {% elif p > 986  %}J: Changeable, Mending
+            {% elif p > 980  %}L: Rather Unsettled, Clearing Later
+            {% elif p > 973  %}M: Unsettled, Probably Improving
+            {% elif p > 967  %}Q: Unsettled, Short Fine Intervals
+            {% elif p > 961  %}T: Very Unsettled, Finer At Times
+            {% elif p > 953  %}Y: Stormy, Possibly Improving
+            {% else           %}Z: Stormy, Much Rain
+            {% endif %}
+
+          {% else %}
+            {# STEADY #}
+            {% if p > 1028 %}A: Settled Fine
+            {% elif p > 1017 %}B: Fine Weather
+            {% elif p > 1011 %}E: Fine, Possible Showers
+            {% elif p > 1003 %}K: Fairly Fine, Showers Likely
+            {% elif p > 996  %}N: Showers, Bright Intervals
+            {% elif p > 991  %}P: Changeable, Some Rain
+            {% elif p > 984  %}S: Unsettled, Rain At Times
+            {% elif p > 978  %}W: Rain At Frequent Intervals
+            {% elif p > 966  %}X: Very Unsettled, Rain
+            {% else           %}Z: Stormy, Much Rain
+            {% endif %}
+
+          {% endif %}

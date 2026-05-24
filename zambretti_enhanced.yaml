@@ -1,0 +1,237 @@
+###############################################################################
+# zambretti_enhanced.yaml
+#
+# Enhanced Zambretti Weather Forecast
+# Based on the original 26-code Zambretti (1920) framework — public domain.
+#
+# Copyright (c) 2026 Karl W. Berger. All rights reserved.
+#
+# Enhancements and original contributions by Karl W. Berger:
+#   - Five-level NOAA pressure trend subdivision
+#   - Next-better/next-worse Zambretti letter selection for rapid trends
+#   - Temperature-gated snow substitution with principled exclusion of
+#     "Showers" codes per 1920s British meteorological transliteration
+#   - Code A restored to "Settled Fine" — captures both stable and fair meanings
+#   - Home Assistant Jinja2 implementation
+#
+# Developed with AI assistance from Claude (Anthropic).
+#
+# License: MIT License
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software to use, copy, modify, merge, publish, distribute,
+# and/or sublicense it, subject to the following conditions:
+# The above copyright notice and this permission notice shall be included
+# in all copies or substantial portions of the software.
+#
+# Date: 2026-05-24
+#
+# Dependencies:
+#   sensor.wx3_pressure_stats                        — statistics sensor,
+#                                                      characteristic: change,
+#                                                      max_age: 3h
+#   sensor.wx3_weather_station_2ad0b0_wx_pressure    — current SLP in mbar
+#   sensor.wx3_weather_station_2ad0b0_wx_temperature — current temp in °F
+#
+# Architecture note: sensors #2, #3, and #4 all read sensor.wx3_pressure_stats
+# directly rather than chaining through sensor #1 (SLP 3h Delta Enh). This
+# eliminates inter-block timing errors where a downstream sensor could read
+# a stale value from the previous trigger cycle. Sensor #1 exists solely
+# as a display/logging convenience for dashboards.
+###############################################################################
+
+template:
+  # Triggered template: all four sensors evaluate simultaneously every 5 minutes
+  # on the clock tick, ensuring a consistent state snapshot without unnecessary
+  # updates — appropriate for a 12-hour forecast driven by a 3-hour pressure window.
+  - trigger:
+      - platform: time_pattern
+        minutes: "/5"
+
+    sensor:
+
+###############################################################################
+# 1. 3-hour pressure delta — display/logging only
+#    NOT used as input by sensors #2, #3, or #4.
+###############################################################################
+      - name: "SLP 3h Delta Enh"
+        unique_id: slp_3h_delta_enh
+        unit_of_measurement: "mbar"
+        device_class: atmospheric_pressure
+        state_class: measurement
+        state: >
+          {{ states('sensor.wx3_pressure_stats') | float(0) | round(2) }}
+
+###############################################################################
+# 2. Barometer Trend Index Enhanced (−2…+2)
+#    Reads sensor.wx3_pressure_stats directly — no chaining through sensor #1.
+###############################################################################
+      - name: "Barometer Trend Index Enh"
+        unique_id: barometer_trend_index_enh
+        state_class: measurement
+        state: >
+          {% set d = states('sensor.wx3_pressure_stats') | float(0) %}
+          {% if d > 2.0 %}      2
+          {% elif d >= 0.5 %}   1
+          {% elif d > -0.5 %}   0
+          {% elif d >= -2.0 %} -1
+          {% else %}            -2
+          {% endif %}
+
+###############################################################################
+# 3. Barometer Trend Indication Enhanced (text)
+#    Reads sensor.wx3_pressure_stats directly — no chaining through sensor #1.
+###############################################################################
+      - name: "Barometer Trend Indication Enh"
+        unique_id: barometer_trend_indication_enh
+        state: >
+          {% set d = states('sensor.wx3_pressure_stats') | float(0) %}
+          {% if d > 2.0 %}
+            Rising Rapidly
+          {% elif d >= 0.5 %}
+            Rising Slowly
+          {% elif d > -0.5 %}
+            Steady
+          {% elif d >= -2.0 %}
+            Falling Slowly
+          {% else %}
+            Falling Rapidly
+          {% endif %}
+
+###############################################################################
+# 4. Zambretti Forecast Enhanced
+#
+# TREND LOGIC:
+#   t =  0  STEADY          — original Zambretti steady table, unchanged
+#   t = -1  FALLING SLOWLY  — original Zambretti falling table, unchanged
+#   t =  1  RISING SLOWLY   — original Zambretti rising table, unchanged
+#   t = -2  FALLING RAPIDLY — same pressure bands as FALLING SLOWLY but each
+#             band selects the next worse Zambretti letter from the original 26:
+#             A->B  B->D  D->H  H->O  O->R  R->U  U->V  V->X  X->Z
+#   t =  2  RISING RAPIDLY  — same pressure bands as RISING SLOWLY but each
+#             band selects the next better Zambretti letter from the original 26:
+#             Z->Y  Y->T  T->Q  Q->M  M->L  L->J  J->I  I->G  G->F  F->C  C->B  B->A
+#             (top two bands both resolve to A — already the best code)
+#
+# SNOW SUBSTITUTION (temp <= 35 deg F):
+#   Affected codes — contain explicit "Rain":
+#     R: Unsettled, Rain Later              -> Unsettled, Snow Later
+#     S: Unsettled, Rain At Times           -> Unsettled, Snow At Times
+#     U: Rain At Times, Worse Later         -> Snow At Times, Worse Later
+#     V: Rain At Times, Becoming Very Unsettled -> Snow At Times, Becoming Very Unsettled
+#     W: Rain At Frequent Intervals         -> Snow At Frequent Intervals
+#     X: Very Unsettled, Rain               -> Very Unsettled, Snow
+#     Z: Stormy, Much Rain                  -> Stormy, Much Snow
+#     P: Changeable, Some Rain              -> Changeable, Some Snow
+#
+#   Unaffected codes — "Showers" is a transliteration of Zambretti's "Showery",
+#   describing shower frequency/likelihood, not precipitation type:
+#     G: Fairly Fine, Possible Showers Early  — left verbatim
+#     H: Fairly Fine, Showers Later           — left verbatim
+#     I: Showers Early, Improving             — left verbatim
+#     N: Showers, Bright Intervals            — left verbatim
+#     O: Showers, Becoming More Unsettled     — left verbatim
+#
+# Reads sensor.wx3_pressure_stats directly — no chaining through sensor #1.
+# NOTE: Every forecast string is one of the original 26 Zambretti codes.
+#       No new codes are invented.
+###############################################################################
+      - name: "Zambretti Forecast Enh"
+        unique_id: zambretti_forecast_enh
+        state: >
+          {% set p    = states('sensor.wx3_weather_station_2ad0b0_wx_pressure') | float(0) %}
+          {% set d    = states('sensor.wx3_pressure_stats') | float(0) %}
+          {% set temp = states('sensor.wx3_weather_station_2ad0b0_wx_temperature') | float(99) %}
+          {% set snow = temp <= 35 %}
+          {% set t    = 2 if d > 2.0 else 1 if d >= 0.5 else 0 if d > -0.5 else -1 if d >= -2.0 else -2 %}
+          {% set precip = 'Snow' if snow else 'Rain' %}
+
+          {% if t == -2 %}
+            {# ----------------------------------------------------------------
+               FALLING RAPIDLY
+               Each band steps one level worse than FALLING SLOWLY:
+               A->B  B->D  D->H  H->O  O->R  R->U  U->V  V->X  X->Z
+            ---------------------------------------------------------------- #}
+            {% if p > 1045 %}B: Fine Weather
+            {% elif p > 1032 %}D: Fine, Becoming Less Settled
+            {% elif p > 1020 %}H: Fairly Fine, Showers Later
+            {% elif p > 1014 %}O: Showers, Becoming More Unsettled
+            {% elif p > 1006 %}R: Unsettled, {{ precip }} Later
+            {% elif p > 1000 %}U: {{ precip }} At Times, Worse Later
+            {% elif p > 993  %}V: {{ precip }} At Times, Becoming Very Unsettled
+            {% elif p > 987  %}X: Very Unsettled, {{ precip }}
+            {% else           %}Z: Stormy, Much {{ precip }}
+            {% endif %}
+
+          {% elif t == -1 %}
+            {# ----------------------------------------------------------------
+               FALLING SLOWLY — original Zambretti falling table, unchanged
+            ---------------------------------------------------------------- #}
+            {% if p > 1045 %}A: Settled Fine
+            {% elif p > 1032 %}B: Fine Weather
+            {% elif p > 1020 %}D: Fine, Becoming Less Settled
+            {% elif p > 1014 %}H: Fairly Fine, Showers Later
+            {% elif p > 1006 %}O: Showers, Becoming More Unsettled
+            {% elif p > 1000 %}R: Unsettled, {{ precip }} Later
+            {% elif p > 993  %}U: {{ precip }} At Times, Worse Later
+            {% elif p > 987  %}V: {{ precip }} At Times, Becoming Very Unsettled
+            {% else           %}X: Very Unsettled, {{ precip }}
+            {% endif %}
+
+          {% elif t == 0 %}
+            {# ----------------------------------------------------------------
+               STEADY — original Zambretti steady table, unchanged
+            ---------------------------------------------------------------- #}
+            {% if p > 1028 %}A: Settled Fine
+            {% elif p > 1017 %}B: Fine Weather
+            {% elif p > 1011 %}E: Fine, Possible Showers
+            {% elif p > 1003 %}K: Fairly Fine, Showers Likely
+            {% elif p > 996  %}N: Showers, Bright Intervals
+            {% elif p > 991  %}P: Changeable, Some {{ precip }}
+            {% elif p > 984  %}S: Unsettled, {{ precip }} At Times
+            {% elif p > 978  %}W: {{ precip }} At Frequent Intervals
+            {% elif p > 966  %}X: Very Unsettled, {{ precip }}
+            {% else           %}Z: Stormy, Much {{ precip }}
+            {% endif %}
+
+          {% elif t == 1 %}
+            {# ----------------------------------------------------------------
+               RISING SLOWLY — original Zambretti rising table, unchanged
+            ---------------------------------------------------------------- #}
+            {% if p > 1025 %}A: Settled Fine
+            {% elif p > 1016 %}B: Fine Weather
+            {% elif p > 1009 %}C: Becoming Fine
+            {% elif p > 1003 %}F: Fairly Fine, Improving
+            {% elif p > 997  %}G: Fairly Fine, Possible Showers Early
+            {% elif p > 992  %}I: Showers Early, Improving
+            {% elif p > 986  %}J: Changeable, Mending
+            {% elif p > 980  %}L: Rather Unsettled, Clearing Later
+            {% elif p > 973  %}M: Unsettled, Probably Improving
+            {% elif p > 967  %}Q: Unsettled, Short Fine Intervals
+            {% elif p > 961  %}T: Very Unsettled, Finer At Times
+            {% elif p > 953  %}Y: Stormy, Possibly Improving
+            {% else           %}Z: Stormy, Much {{ precip }}
+            {% endif %}
+
+          {% else %}
+            {# ----------------------------------------------------------------
+               RISING RAPIDLY (t == 2)
+               Each band steps one level better than RISING SLOWLY:
+               Z->Y  Y->T  T->Q  Q->M  M->L  L->J  J->I  I->G  G->F  F->C  C->B  B->A
+               Top two bands both cap at A — already the best code.
+            ---------------------------------------------------------------- #}
+            {% if p > 1025 %}A: Settled Fine
+            {% elif p > 1016 %}A: Settled Fine
+            {% elif p > 1009 %}B: Fine Weather
+            {% elif p > 1003 %}C: Becoming Fine
+            {% elif p > 997  %}F: Fairly Fine, Improving
+            {% elif p > 992  %}G: Fairly Fine, Possible Showers Early
+            {% elif p > 986  %}I: Showers Early, Improving
+            {% elif p > 980  %}J: Changeable, Mending
+            {% elif p > 973  %}L: Rather Unsettled, Clearing Later
+            {% elif p > 967  %}M: Unsettled, Probably Improving
+            {% elif p > 961  %}Q: Unsettled, Short Fine Intervals
+            {% elif p > 953  %}T: Very Unsettled, Finer At Times
+            {% else           %}Y: Stormy, Possibly Improving
+            {% endif %}
+
+          {% endif %}
